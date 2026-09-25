@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>RoboTech Road Dash</title>
+<style>
+  :root{
+    box-sizing:border-box;
+    padding-top:env(safe-area-inset-top,0px);
+    padding-bottom:env(safe-area-inset-bottom,0px);
+  }
+  *{box-sizing:border-box;}
+  html{height:100%; scroll-padding-top:env(safe-area-inset-top,0px);}
+  body{
+    height:100%; margin:0; display:flex; align-items:center; justify-content:center;
+    background:linear-gradient(#8fd6ff,#dffcff);
+    font-family:'Comic Sans MS','Chalkboard SE','Marker Felt',cursive,sans-serif;
+    color:#123;
+  }
+  #wrap{ width:100%; max-width:430px; padding:10px; display:flex; flex-direction:column; align-items:center; gap:8px; }
+  h1{ margin:2px 0; font-size:1.3rem; text-align:center; color:#0a3b6b; text-shadow:1px 1px 0 #fff; }
+  #hud{ display:flex; justify-content:space-between; width:100%; max-width:400px; font-weight:bold; font-size:1.05rem; padding:0 6px; }
+  #stage{ position:relative; width:100%; max-width:400px; }
+  #gameCanvas{
+    width:100%; max-width:400px; aspect-ratio:2/3;
+    background:#555; border:5px solid #333; border-radius:10px;
+    touch-action:none; box-shadow:0 6px 0 #222;
+  }
+  #controls{ display:flex; gap:10px; width:100%; max-width:400px; justify-content:center; }
+  .btn{
+    flex:1; padding:16px 0; text-align:center; font-size:1.4rem; font-weight:bold;
+    background:#2ecc71; color:#fff; border:none; border-radius:12px;
+    box-shadow:0 4px 0 #1f8f4a; cursor:pointer; user-select:none;
+  }
+  .btn:active{ transform:translateY(3px); box-shadow:0 1px 0 #1f8f4a; }
+  #overlay{
+    position:absolute; inset:0; background:rgba(0,0,0,.6);
+    display:flex; align-items:center; justify-content:center; flex-direction:column;
+    color:#fff; text-align:center; border-radius:10px; gap:10px; padding:16px;
+  }
+  #restartBtn,#startBtn{
+    padding:10px 22px; font-size:1.1rem; font-weight:bold; border:none; border-radius:10px;
+    background:#ffd23f; color:#5a4400; box-shadow:0 4px 0 #c9a020; cursor:pointer;
+  }
+  .diffRow{ display:flex; gap:8px; }
+  .diffBtn{
+    padding:8px 14px; font-size:.95rem; font-weight:bold; border-radius:8px;
+    border:2px solid #fff; background:transparent; color:#fff; cursor:pointer;
+  }
+  .diffBtn.active{ background:#ffd23f; color:#5a4400; border-color:#c9a020; }
+  small{opacity:.9;}
+  footer{font-size:.75rem; opacity:.7; text-align:center;}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h1>🚗 RoboTech Road Dash</h1>
+  <div id="hud">
+    <span>Score: <span id="score">0</span></span>
+    <span>Best: <span id="best">0</span></span>
+  </div>
+  <div id="stage">
+    <canvas id="gameCanvas" width="400" height="600"></canvas>
+    <div id="overlay"></div>
+  </div>
+  <div id="controls">
+    <button class="btn" id="leftBtn">⬅</button>
+    <button class="btn" id="rightBtn">➡</button>
+  </div>
+  <footer>Made for RoboTech Challenge 6.0 — Game Development Category</footer>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+const NUM_LANES = 6;
+const LANES = [];
+for(let i=0;i<NUM_LANES;i++){
+  LANES.push( (W/NUM_LANES) * (i+0.5) );
+}
+const LANE_W = W/NUM_LANES;
+
+const SPEED_SETTINGS = {
+  slow:   { base:3.0, growth:1100, spawnMin:34, spawnBase:60 },
+  normal: { base:4.5, growth:700,  spawnMin:24, spawnBase:50 },
+  fast:   { base:6.5, growth:450,  spawnMin:16, spawnBase:38 }
+};
+let difficulty = 'normal';
+
+let laneIdx = Math.floor(NUM_LANES/2);
+let playerX = LANES[laneIdx];
+const playerY = H*0.82;
+
+let obstacles = [];
+let speed = 4.5;
+let spawnTimer = 0;
+let score = 0;
+let best = parseInt(localStorage.getItem('roadDashBest')||'0',10);
+document.getElementById('best').textContent = best;
+let running = false;
+let frame = 0;
+let roadOffset = 0;
+
+function resetGame(){
+  laneIdx = Math.floor(NUM_LANES/2);
+  playerX = LANES[laneIdx];
+  obstacles = [];
+  speed = SPEED_SETTINGS[difficulty].base;
+  spawnTimer = 0; score = 0; frame = 0; roadOffset = 0;
+  document.getElementById('score').textContent = 0;
+}
+
+function diffButtonsHTML(){
+  const labels = { slow:'🐢 Slow', normal:'🚙 Normal', fast:'🚀 Fast' };
+  return `<div class="diffRow">` + Object.keys(SPEED_SETTINGS).map(k =>
+    `<button class="diffBtn${k===difficulty?' active':''}" data-diff="${k}">${labels[k]}</button>`
+  ).join('') + `</div>`;
+}
+
+function attachDiffHandlers(){
+  document.querySelectorAll('.diffBtn').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      difficulty = b.getAttribute('data-diff');
+      document.querySelectorAll('.diffBtn').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active');
+    });
+  });
+}
+
+function showStartOverlay(){
+  const ov = document.getElementById('overlay');
+  ov.style.display='flex';
+  ov.innerHTML = `
+    <div style="font-size:1.3rem;">RoboTech Road Dash</div>
+    <small>6 tracks wali road hai.<br>⬅ ➡ se apni car ko oncoming traffic se bachao!</small>
+    <div>Speed choose karo:</div>
+    ${diffButtonsHTML()}
+    <button id="startBtn">▶ Start Game</button>
+  `;
+  attachDiffHandlers();
+  document.getElementById('startBtn').addEventListener('click', startGame);
+}
+
+function startGame(){
+  resetGame();
+  running = true;
+  document.getElementById('overlay').style.display='none';
+  requestAnimationFrame(loop);
+}
+
+function endGame(){
+  running = false;
+  if(score > best){ best = score; localStorage.setItem('roadDashBest', String(best)); }
+  document.getElementById('best').textContent = best;
+  const ov = document.getElementById('overlay');
+  ov.style.display='flex';
+  ov.innerHTML = `
+    <div style="font-size:1.4rem;">💥 Crash!</div>
+    <div>Score: <b>${score}</b> &nbsp; Best: <b>${best}</b></div>
+    <div>Speed choose karo:</div>
+    ${diffButtonsHTML()}
+    <button id="restartBtn">🔁 Play Again</button>
+  `;
+  attachDiffHandlers();
+  document.getElementById('restartBtn').addEventListener('click', startGame);
+}
+
+function moveLane(dir){
+  if(!running) return;
+  laneIdx = Math.max(0, Math.min(NUM_LANES-1, laneIdx+dir));
+}
+
+document.addEventListener('keydown', e=>{
+  if(e.code==='ArrowLeft'){ e.preventDefault(); moveLane(-1); }
+  else if(e.code==='ArrowRight'){ e.preventDefault(); moveLane(1); }
+});
+document.getElementById('leftBtn').addEventListener('click', ()=>moveLane(-1));
+document.getElementById('rightBtn').addEventListener('click', ()=>moveLane(1));
+
+const carColors = ['#e74c3c','#f39c12','#9b59b6','#e67e22','#c0392b','#d35400'];
+
+function spawnRow(){
+  const howMany = Math.random() < 0.25 ? 2 : 1;
+  const usedLanes = new Set();
+  for(let i=0;i<howMany;i++){
+    let lane = Math.floor(Math.random()*NUM_LANES);
+    if(!usedLanes.has(lane)){
+      usedLanes.add(lane);
+      obstacles.push({
+        lane, y:-70, w: LANE_W*0.62, h:60,
+        color: carColors[Math.floor(Math.random()*carColors.length)]
+      });
+    }
+  }
+}
+
+function drawCarShape(x,y,w,h,bodyColor){
+  ctx.save();
+  ctx.translate(x,y);
+  ctx.fillStyle='rgba(0,0,0,0.25)';
+  ctx.beginPath(); ctx.ellipse(0,h/2+4,w/2,6,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=bodyColor; ctx.strokeStyle='#1a1a1a'; ctx.lineWidth=2;
+  roundRect(-w/2,-h/2,w,h,8); ctx.fill(); ctx.stroke();
+  ctx.fillStyle='#bfe6ff';
+  roundRect(-w/2+5,-h/2+8,w-10,h*0.32,4); ctx.fill();
+  ctx.fillStyle='#111';
+  ctx.fillRect(-w/2-3, -h/2+6, 6, h*0.28);
+  ctx.fillRect(w/2-3, -h/2+6, 6, h*0.28);
+  ctx.fillRect(-w/2-3, h/2-h*0.28-6, 6, h*0.28);
+  ctx.fillRect(w/2-3, h/2-h*0.28-6, 6, h*0.28);
+  ctx.restore();
+}
+function roundRect(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+
+function drawRoad(){
+  ctx.fillStyle = '#555';
+  ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.lineWidth = 3;
+  ctx.setLineDash([20,18]);
+  for(let i=1;i<NUM_LANES;i++){
+    const x = LANE_W*i;
+    ctx.beginPath();
+    ctx.moveTo(x, -20 + (roadOffset % 38));
+    ctx.lineTo(x, H);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(4,0); ctx.lineTo(4,H); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(W-4,0); ctx.lineTo(W-4,H); ctx.stroke();
+}
+
+function loop(){
+  if(!running) return;
+  frame++;
+  roadOffset += speed*2;
+
+  const cfg = SPEED_SETTINGS[difficulty];
+  speed = cfg.base + Math.min(6, frame/cfg.growth);
+  spawnTimer -= 1;
+  if(spawnTimer <= 0){
+    spawnRow();
+    spawnTimer = Math.max(cfg.spawnMin, cfg.spawnBase - Math.floor(frame/250));
+  }
+
+  playerX += (LANES[laneIdx]-playerX)*0.3;
+
+  for(const o of obstacles) o.y += speed*2.3;
+  obstacles = obstacles.filter(o=>o.y < H+80);
+
+  for(const o of obstacles){
+    if(o.lane===laneIdx && Math.abs(o.y - playerY) < (o.h/2 + 25)){
+      endGame(); return;
+    }
+  }
+
+  score += 0.08;
+  document.getElementById('score').textContent = Math.floor(score);
+
+  drawRoad();
+  obstacles.forEach(o=>drawCarShape(LANES[o.lane], o.y, o.w, o.h, o.color));
+  drawCarShape(playerX, playerY, LANE_W*0.62, 60, '#2ecc71');
+
+  requestAnimationFrame(loop);
+}
+
+showStartOverlay();
+</script>
+</body>
+</html>
